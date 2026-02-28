@@ -1,0 +1,50 @@
+import os
+import asyncio
+import pandas as pd
+import matplotlib.pyplot as plt
+import io
+import alpaca_trade_api as tradeapi
+from telegram import Bot
+
+# GitHub Secrets'tan verileri çek
+ALPACA_KEY = os.getenv('ALPACA_KEY')
+ALPACA_SECRET = os.getenv('ALPACA_SECRET')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
+
+api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
+
+async def main():
+    symbol = "AAPL"
+    # Analiz
+    bars = api.get_bars(symbol, '1Hour', limit=50).df
+    bars['SMA_5'] = bars['close'].rolling(5).mean()
+    bars['SMA_20'] = bars['close'].rolling(20).mean()
+    
+    # Grafik Çiz
+    plt.figure(figsize=(10, 6))
+    plt.plot(bars.index, bars['close'], label='Fiyat')
+    plt.plot(bars.index, bars['SMA_5'], label='SMA 5')
+    plt.plot(bars.index, bars['SMA_20'], label='SMA 20')
+    plt.title(f"{symbol} Güncel Durum")
+    plt.legend()
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+
+    # Kar/Zarar Hesabı (Basit)
+    account = api.get_account()
+    msg = f"📊 *{symbol} Raporu*\nFiyat: ${bars['close'].iloc[-1]}\nKasa: ${account.cash}"
+
+    # Telegram'a gönder
+    bot = Bot(token=TELEGRAM_TOKEN)
+    await bot.send_photo(chat_id=CHAT_ID, photo=buf, caption=msg)
+    
+    # Strateji: SMA5, SMA20'yi yukarı keserse al
+    if bars['SMA_5'].iloc[-1] > bars['SMA_20'].iloc[-1]:
+        # api.submit_order(symbol=symbol, qty=1, side='buy', type='market', time_in_force='gtc')
+        await bot.send_message(chat_id=CHAT_ID, text="🚀 Alım Sinyali Tespit Edildi!")
+
+if __name__ == "__main__":
+    asyncio.run(main())
