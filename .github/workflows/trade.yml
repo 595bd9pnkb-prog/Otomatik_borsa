@@ -1,0 +1,31 @@
+name: Borsa Botu Calistir
+
+on:
+  schedule:
+    # Hafta içi her saat başı çalışır (UTC zaman dilimine göre)
+    - cron: '0 * * * 1-5'
+  workflow_dispatch: # Manuel olarak başlatmak istersen butonu aktif eder
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodları Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Kütüphaneleri Yükle
+        run: |
+          pip install alpaca-trade-api python-telegram-bot matplotlib pandas
+
+      - name: Botu Çalıştır
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
