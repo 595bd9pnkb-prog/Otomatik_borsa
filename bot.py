@@ -12,11 +12,11 @@ ALPACA_SECRET = os.getenv('ALPACA_SECRET')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 
+# AYARLAR
 SYMBOLS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD",
     "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"
 ]
-
 STOP_LOSS_PCT = 0.03   
 TAKE_PROFIT_PCT = 0.06 
 TRADE_PCT = 0.10       
@@ -49,7 +49,7 @@ async def process_symbol(symbol, bot, cash_to_spend):
         last_sma20 = bars['SMA_20'].iloc[-1]
         last_rsi = bars['RSI'].iloc[-1]
         
-        print(f"Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA20: {last_sma20:.2f} | RSI: {last_rsi:.2f}")
+        print(f"Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA20: {last_sma20:.2f}")
 
         # 3. Mevcut Pozisyonu Kontrol Et
         position = None
@@ -64,7 +64,7 @@ async def process_symbol(symbol, bot, cash_to_spend):
         if position:
             entry_price = float(position.avg_entry_price)
             current_pl_pct = (last_close - entry_price) / entry_price
-            print(f"Mevcut Pozisyon: %{current_pl_pct*100:.2f} kâr/zarar")
+            print(f"Pozisyon Durumu: %{current_pl_pct*100:.2f}")
 
             if current_pl_pct <= -STOP_LOSS_PCT:
                 api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
@@ -78,15 +78,15 @@ async def process_symbol(symbol, bot, cash_to_spend):
 
         # 5. ALIM MANTIĞI (Pozisyon Yoksa)
         else:
-            # Şimdilik sadece SMA5 > SMA20 ise al diyoruz (Test için kesişme şartını kaldırdık)
+            # TEST MODU: SMA5 > SMA20 ise direkt alım emri gönderir
             if last_sma5 > last_sma20:
-                qty = int(cash_to_spend / last_close) # Güvenli olması için küsuratsız adet
+                qty = int(cash_to_spend / last_close) 
                 if qty > 0:
                     print(f"✅ ALIM YAPILIYOR: {qty} Adet")
                     api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
-                    signal_msg = f"🚀 ALIM YAPILDI! Hedef: +%{TAKE_PROFIT_PCT*100}"
+                    signal_msg = f"🚀 ALIM YAPILDI! (SMA5 > SMA20)"
                 else:
-                    print("❌ Bakiye 1 adet almaya yetmiyor.")
+                    print(f"❌ {symbol} için nakit yetersiz.")
 
         # 6. Telegram Bildirimi
         if signal_msg:
@@ -95,7 +95,8 @@ async def process_symbol(symbol, bot, cash_to_spend):
             ax1.plot(bars.index, bars['SMA_5'], label='SMA 5', color='orange')
             ax1.plot(bars.index, bars['SMA_20'], label='SMA 20', color='blue')
             ax1.legend(); ax1.set_title(f"{symbol} İşlem")
-            ax2.plot(bars.index, bars['RSI'], color='purple'); ax2.axhline(70, color='red'); ax2.axhline(30, color='green')
+            ax2.plot(bars.index, bars['RSI'], color='purple')
+            ax2.axhline(70, color='red'); ax2.axhline(30, color='green')
             
             buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
             await bot.send_photo(chat_id=CHAT_ID, photo=buf, caption=f"🔔 *{symbol}*\n{signal_msg}", parse_mode='Markdown')
@@ -106,17 +107,20 @@ async def process_symbol(symbol, bot, cash_to_spend):
 
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
-    acc = api.get_account()
-    cash_to_spend = float(acc.cash) * TRADE_PCT
-    print(f"Cüzdan: {acc.cash} | İşlem Başına Nakit: {cash_to_spend}")
+    try:
+        acc = api.get_account()
+        cash_to_spend = float(acc.cash) * TRADE_PCT
+        print(f"Cüzdan: {acc.cash} | İşlem Başına Nakit: {cash_to_spend}")
 
-    for symbol in SYMBOLS:
-        await process_symbol(symbol, bot, cash_to_spend)
-        await asyncio.sleep(1)
+        for symbol in SYMBOLS:
+            await process_symbol(symbol, bot, cash_to_spend)
+            await asyncio.sleep(1)
 
-    final_acc = api.get_account()
-    msg = f"✅ Tarama Bitti.\nEquity: ${float(final_acc.equity):,.2f}\nNakit: ${float(final_acc.cash):,.2f}"
-    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        final_acc = api.get_account()
+        msg = f"✅ Tarama Bitti.\nEquity: ${float(final_acc.equity):,.2f}\nNakit: ${float(final_acc.cash):,.2f}"
+        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+    except Exception as e:
+        print(f"🚨 ANA HATA: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
