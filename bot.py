@@ -72,7 +72,7 @@ async def process_symbol(symbol, bot, cash_to_spend):
 
         # 2. YENİ ALIM SİNYALİ (Eğer pozisyon yoksa)
         elif not position:
-            if last_sma5 > last_sma20 and prev_sma5 <= last_sma20 and last_rsi < 70:
+            if last_sma5 > last_sma20:
                 qty = cash_to_spend / last_close
                 if qty > 0:
                     api.submit_order(
