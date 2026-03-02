@@ -32,28 +32,35 @@ def calculate_rsi(data, window=14):
 
 async def process_symbol(symbol, bot, cash_to_spend):
     try:
-        # Mevcut pozisyonu kontrol et
-        position = None
-        try:
-            position = api.get_position(symbol)
-        except:
-            pass
-
-        # Veri çekme
-        bars = api.get_bars(symbol, '1Hour', limit=100).df
-        if bars.empty: return
+        bars = api.get_bars(symbol, '1Hour', limit=50).df
+        if bars.empty: 
+            print(f"⚠️ {symbol} için veri çekilemedi!")
+            return
 
         bars['SMA_5'] = bars['close'].rolling(5).mean()
         bars['SMA_20'] = bars['close'].rolling(20).mean()
-        bars['RSI'] = calculate_rsi(bars['close'])
         
         last_close = bars['close'].iloc[-1]
         last_sma5 = bars['SMA_5'].iloc[-1]
-        prev_sma5 = bars['SMA_5'].iloc[-2]
         last_sma20 = bars['SMA_20'].iloc[-1]
-        last_rsi = bars['RSI'].iloc[-1]
 
-        signal_msg = ""
+        # LOG: Terminale yazdırıyoruz (GitHub Actions -> Logs kısmında göreceksin)
+        print(f"Sembol: {symbol} | Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA20: {last_sma20:.2f}")
+
+        # Basit Kontrol: SMA5 > SMA20 ise al (Kesişme beklemeden)
+        if last_sma5 > last_sma20:
+            qty = int(cash_to_spend / last_close) # TAM ADET TESTİ
+            if qty > 0:
+                print(f"✅ {symbol} için ALIM EMRİ GÖNDERİLİYOR... Adet: {qty}")
+                api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
+            else:
+                print(f"❌ {symbol} çok pahalı, {cash_to_spend}$ ile 1 adet bile alınamıyor.")
+        else:
+            print(f"ℹ️ {symbol} için strateji uygun değil (SMA5 < SMA20)")
+
+    except Exception as e:
+        print(f"🚨 {symbol} HATASI: {str(e)}")
+
         
         # 1. MEVCUT POZİSYON KONTROLÜ (Stop Loss / Take Profit)
         if position:
