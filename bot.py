@@ -34,14 +34,14 @@ async def process_symbol(symbol, bot, cash_to_spend):
     print(f"--- {symbol} ANALİZ EDİLİYOR ---")
     try:
         # 1. Veri Çekme
-        bars = api.get_bars(symbol, '1Hour', limit=50).df
+        bars = api.get_bars(symbol, '1Hour', limit=100).df
         if bars.empty:
             print(f"⚠️ {symbol} için veri boş geldi!")
             return
 
         # 2. Teknik Hesaplamalar
         bars['SMA_5'] = bars['close'].rolling(5).mean()
-        bars['SMA_20'] = bars['close'].rolling(20).mean()
+        bars['SMA_20'] = bars['close'].rolling(10).mean()
         bars['RSI'] = calculate_rsi(bars['close'])
 
         last_close = bars['close'].iloc[-1]
