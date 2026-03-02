@@ -33,25 +33,33 @@ def calculate_rsi(data, window=14):
 async def process_symbol(symbol, bot, cash_to_spend):
     print(f"--- {symbol} ANALİZ EDİLİYOR ---")
     try:
-        # 1. Veri Çekme
+        # 1. Veri Çekme (Limit artırıldı)
         bars = api.get_bars(symbol, '1Hour', limit=100).df
         if bars.empty:
             print(f"⚠️ {symbol} için veri boş geldi!")
             return
 
-        # 2. Teknik Hesaplamalar
+        # 2. Teknik Hesaplamalar (SMA20 yerine SMA10 kullanıyoruz)
         bars['SMA_5'] = bars['close'].rolling(5).mean()
-        bars['SMA_20'] = bars['close'].rolling(10).mean()
+        bars['SMA_10'] = bars['close'].rolling(10).mean()
         bars['RSI'] = calculate_rsi(bars['close'])
+        
+        # KRİTİK: Boş verileri temizle (nan hatasını bitirir)
+        bars.dropna(inplace=True)
+
+        if len(bars) < 2: # Eğer temizlikten sonra veri kalmadıysa pas geç
+            print(f"⚠️ {symbol} için yeterli SMA verisi oluşmadı (nan).")
+            return
 
         last_close = bars['close'].iloc[-1]
         last_sma5 = bars['SMA_5'].iloc[-1]
-        last_sma20 = bars['SMA_20'].iloc[-1]
+        last_sma10 = bars['SMA_10'].iloc[-1]
         last_rsi = bars['RSI'].iloc[-1]
         
-        print(f"Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA20: {last_sma20:.2f}")
+        # Log ekranında nan yerine rakam göreceksin
+        print(f"Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA10: {last_sma10:.2f}")
 
-        # 3. Mevcut Pozisyonu Kontrol Et
+        # 3. Mevcut Pozisyon Kontrolü
         position = None
         try:
             position = api.get_position(symbol)
@@ -60,33 +68,28 @@ async def process_symbol(symbol, bot, cash_to_spend):
 
         signal_msg = ""
         
-        # 4. SATIŞ MANTIĞI (Pozisyon Varsa)
+        # 4. SATIŞ MANTIĞI
         if position:
             entry_price = float(position.avg_entry_price)
             current_pl_pct = (last_close - entry_price) / entry_price
-            print(f"Pozisyon Durumu: %{current_pl_pct*100:.2f}")
+            if current_pl_pct <= -STOP_LOSS_PCT or current_pl_pct >= TAKE_PROFIT_PCT or last_sma5 < last_sma10:
+                api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
+                signal_msg = f"📉 POZİSYON KAPATILDI (Kar/Zarar: %{current_pl_pct*100:.2f})"
 
-            if current_pl_pct <= -STOP_LOSS_PCT:
-                api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
-                signal_msg = f"🛑 ZARAR KES! Kayıp: %{current_pl_pct*100:.2f}"
-            elif current_pl_pct >= TAKE_PROFIT_PCT:
-                api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
-                signal_msg = f"💰 KAR AL! Kazanç: %{current_pl_pct*100:.2f}"
-            elif last_sma5 < last_sma20:
-                api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
-                signal_msg = f"📉 TREND DEĞİŞTİ, SATILDI."
-
-        # 5. ALIM MANTIĞI (Pozisyon Yoksa)
+        # 5. ALIM MANTIĞI
         else:
-            # TEST MODU: SMA5 > SMA20 ise direkt alım emri gönderir
-            if last_sma5 > last_sma20:
-                qty = int(cash_to_spend / last_close) 
+            if last_sma5 > last_sma10:
+                qty = int(cash_to_spend / last_close)
                 if qty > 0:
-                    print(f"✅ ALIM YAPILIYOR: {qty} Adet")
+                    print(f"✅ {symbol} ALINIYOR! Adet: {qty}")
                     api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
-                    signal_msg = f"🚀 ALIM YAPILDI! (SMA5 > SMA20)"
+                    signal_msg = f"🚀 ALIM YAPILDI! (SMA5 > SMA10)"
                 else:
-                    print(f"❌ {symbol} için nakit yetersiz.")
+                    print(f"❌ Nakit {symbol} almaya yetmiyor.")
+
+    except Exception as e:
+        print(f"🚨 {symbol} HATASI: {str(e)}")
+
 
         # 6. Telegram Bildirimi
         if signal_msg:
