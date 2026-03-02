@@ -1,129 +1,70 @@
-import os
-import asyncio
-import pandas as pd
-import matplotlib.pyplot as plt
-import io
+import os, asyncio, pandas as pd, matplotlib.pyplot as plt, io
 import alpaca_trade_api as tradeapi
 from telegram import Bot
 
-# API ve Gizli Bilgiler
+# API BİLGİLERİ
 ALPACA_KEY = os.getenv('ALPACA_KEY')
 ALPACA_SECRET = os.getenv('ALPACA_SECRET')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 
-# AYARLAR
-SYMBOLS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD",
-    "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"
-]
-STOP_LOSS_PCT = 0.03   
-TAKE_PROFIT_PCT = 0.06 
-TRADE_PCT = 0.10       
+SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"]
+TRADE_PCT = 0.10
 
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
-
-def calculate_rsi(data, window=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1+rs))
 
 async def process_symbol(symbol, bot, cash_to_spend):
     print(f"--- {symbol} ANALİZ EDİLİYOR ---")
     try:
-        # 1. Veri Çekme (Limit artırıldı)
-        bars = api.get_bars(symbol, '1Hour', limit=100).df
-        if bars.empty:
-            print(f"⚠️ {symbol} için veri boş geldi!")
-            return
+        # ÇÖZÜM: '1Hour' yerine '1Min' kullanarak veri boşluğu hatasını gideriyoruz
+        bars = api.get_bars(symbol, '1Min', limit=50).df
+        if bars.empty: return
 
-        # 2. Teknik Hesaplamalar (SMA20 yerine SMA10 kullanıyoruz)
-        bars['SMA_5'] = bars['close'].rolling(5).mean()
-        bars['SMA_10'] = bars['close'].rolling(10).mean()
-        bars['RSI'] = calculate_rsi(bars['close'])
-        
-        # KRİTİK: Boş verileri temizle (nan hatasını bitirir)
+        # Kısa vadeli SMA değerleri (Dakikalıkta hızlı tepki için 3 ve 8)
+        bars['SMA_FAST'] = bars['close'].rolling(3).mean()
+        bars['SMA_SLOW'] = bars['close'].rolling(8).mean()
         bars.dropna(inplace=True)
 
-        if len(bars) < 2: # Eğer temizlikten sonra veri kalmadıysa pas geç
-            print(f"⚠️ {symbol} için yeterli SMA verisi oluşmadı (nan).")
+        if len(bars) < 1:
+            print(f"⚠️ {symbol} için veri yetersiz.")
             return
 
         last_close = bars['close'].iloc[-1]
-        last_sma5 = bars['SMA_5'].iloc[-1]
-        last_sma10 = bars['SMA_10'].iloc[-1]
-        last_rsi = bars['RSI'].iloc[-1]
+        last_fast = bars['SMA_FAST'].iloc[-1]
+        last_slow = bars['SMA_SLOW'].iloc[-1]
         
-        # Log ekranında nan yerine rakam göreceksin
-        print(f"Fiyat: {last_close} | SMA5: {last_sma5:.2f} | SMA10: {last_sma10:.2f}")
+        print(f"Fiyat: {last_close} | Hızlı: {last_fast:.2f} | Yavaş: {last_slow:.2f}")
 
-        # 3. Mevcut Pozisyon Kontrolü
         position = None
-        try:
-            position = api.get_position(symbol)
-        except:
-            pass
+        try: position = api.get_position(symbol)
+        except: pass
 
         signal_msg = ""
+        # ALIM: Hızlı ortalama yavaşı yukarı kestiğinde
+        if not position and last_fast > last_slow:
+            qty = int(cash_to_spend / last_close)
+            if qty > 0:
+                api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
+                signal_msg = "🚀 DAKİKALIK ALIM YAPILDI!"
         
-        # 4. SATIŞ MANTIĞI
-        if position:
-            entry_price = float(position.avg_entry_price)
-            current_pl_pct = (last_close - entry_price) / entry_price
-            if current_pl_pct <= -STOP_LOSS_PCT or current_pl_pct >= TAKE_PROFIT_PCT or last_sma5 < last_sma10:
-                api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
-                signal_msg = f"📉 POZİSYON KAPATILDI (Kar/Zarar: %{current_pl_pct*100:.2f})"
+        # SATIŞ: Hızlı ortalama yavaşın altına düştüğünde
+        elif position and last_fast < last_slow:
+            api.submit_order(symbol=symbol, qty=position.qty, side='sell', type='market', time_in_force='gtc')
+            signal_msg = "📉 DAKİKALIK SATIŞ YAPILDI!"
 
-        # 5. ALIM MANTIĞI
-        else:
-            if last_sma5 > last_sma10:
-                qty = int(cash_to_spend / last_close)
-                if qty > 0:
-                    print(f"✅ {symbol} ALINIYOR! Adet: {qty}")
-                    api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
-                    signal_msg = f"🚀 ALIM YAPILDI! (SMA5 > SMA10)"
-                else:
-                    print(f"❌ Nakit {symbol} almaya yetmiyor.")
-
-    except Exception as e:
-        print(f"🚨 {symbol} HATASI: {str(e)}")
-
-
-        # 6. Telegram Bildirimi
         if signal_msg:
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]})
-            ax1.plot(bars.index, bars['close'], label='Fiyat', color='black')
-            ax1.plot(bars.index, bars['SMA_5'], label='SMA 5', color='orange')
-            ax1.plot(bars.index, bars['SMA_20'], label='SMA 20', color='blue')
-            ax1.legend(); ax1.set_title(f"{symbol} İşlem")
-            ax2.plot(bars.index, bars['RSI'], color='purple')
-            ax2.axhline(70, color='red'); ax2.axhline(30, color='green')
-            
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            await bot.send_photo(chat_id=CHAT_ID, photo=buf, caption=f"🔔 *{symbol}*\n{signal_msg}", parse_mode='Markdown')
-            plt.close()
+            msg = f"🔔 *{symbol}*\n{signal_msg}\nFiyat: ${last_close:.2f}"
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
 
-    except Exception as e:
-        print(f"🚨 {symbol} HATASI: {str(e)}")
+    except Exception as e: print(f"🚨 {symbol} HATASI: {e}")
 
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
-    try:
-        acc = api.get_account()
-        cash_to_spend = float(acc.cash) * TRADE_PCT
-        print(f"Cüzdan: {acc.cash} | İşlem Başına Nakit: {cash_to_spend}")
+    acc = api.get_account()
+    cash_to_spend = float(acc.cash) * TRADE_PCT
+    for s in SYMBOLS:
+        await process_symbol(s, bot, cash_to_spend)
+        await asyncio.sleep(0.5)
+    print("✅ Tarama Bitti.")
 
-        for symbol in SYMBOLS:
-            await process_symbol(symbol, bot, cash_to_spend)
-            await asyncio.sleep(1)
-
-        final_acc = api.get_account()
-        msg = f"✅ Tarama Bitti.\nEquity: ${float(final_acc.equity):,.2f}\nNakit: ${float(final_acc.cash):,.2f}"
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
-    except Exception as e:
-        print(f"🚨 ANA HATA: {e}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())
