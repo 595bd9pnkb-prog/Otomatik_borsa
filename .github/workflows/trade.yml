@@ -18,9 +18,11 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Kütüphaneleri Yükle
+      - name: Kütüphaneleri Kur
         run: |
-          pip install alpaca-trade-api python-telegram-bot matplotlib pandas
+          python -m pip install --upgrade pip
+          pip install pandas alpaca-trade-api python-telegram-bot matplotlib gspread oauth2client
+
 
       - name: Botu Çalıştır
         env:
