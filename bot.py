@@ -8,14 +8,13 @@ ALPACA_KEY = os.getenv('ALPACA_KEY')
 ALPACA_SECRET = os.getenv('ALPACA_SECRET')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
-GOOGLE_JSON = os.getenv('GOOGLE_SHEETS_JSON') # GitHub Secrets'a eklediğin JSON
+GOOGLE_JSON = os.getenv('GOOGLE_SHEETS_JSON')
 
 SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"]
 TRADE_PCT = 0.10
 
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
 
-# GOOGLE SHEETS KAYIT FONKSİYONU
 def log_to_sheets(data):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -24,7 +23,7 @@ def log_to_sheets(data):
         client = gspread.authorize(creds)
         sheet = client.open("Borsa_Log").sheet1
         sheet.append_row(data)
-        print(f"✅ Sheets Kaydı Başarılı: {data[1]}")
+        print(f"✅ Sheets Kaydı: {data[1]}")
     except Exception as e:
         print(f"🚨 Sheets Hatası: {e}")
 
@@ -45,29 +44,29 @@ async def process_symbol(symbol, bot, cash_to_spend):
         tarih = pd.Timestamp.now(tz='Europe/Istanbul').strftime('%Y-%m-%d %H:%M')
 
         position = None
-        try: position = api.get_position(symbol)
-        except: pass
+        try:
+            position = api.get_position(symbol)
+        except:
+            pass
 
         # ALIM MANTIĞI
         if not position and last_fast > last_slow:
             qty = int(cash_to_spend / last_close)
             if qty > 0:
                 api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
-                # SHEETS KAYDI: Tarih, Sembol, İşlem, Fiyat, Adet, Toplam, Hızlı, Yavaş, RSI(0 şimdilik)
                 log_to_sheets([tarih, symbol, "ALIM", last_close, qty, last_close*qty, last_fast, last_slow, 0])
-                await bot.send_message(chat_id=CHAT_ID, text=f"🚀 *{symbol}* ALINDI\nFiyat: ${        
-        
-        # SATIŞ MANTIĞI (Sadece elimizde hisse varsa sat)
+                await bot.send_message(chat_id=CHAT_ID, text=f"🚀 *{symbol}* ALINDI\nFiyat: ${last_close}")
+
+        # SATIŞ MANTIĞI (Sadece elde hisse varsa)
         elif position and last_fast < last_slow:
-            qty = int(position.qty) # Alpaca'dan gelen gerçek adeti kullan
+            qty = int(position.qty)
             if qty > 0:
-                print(f"📉 {symbol} SATILIYOR... Adet: {qty}")
                 api.submit_order(symbol=symbol, qty=qty, side='sell', type='market', time_in_force='gtc')
                 log_to_sheets([tarih, symbol, "SATIS", last_close, qty, last_close*qty, last_fast, last_slow, 0])
                 await bot.send_message(chat_id=CHAT_ID, text=f"📉 *{symbol}* SATILDI\nFiyat: ${last_close}")
-            else:
-                print(f"ℹ️ {symbol} satılamadı, çünkü elde hiç yok.")
 
+    except Exception as e:
+        print(f"🚨 {symbol} Hatası: {e}")
 
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
@@ -78,4 +77,5 @@ async def main():
         await asyncio.sleep(1)
     print("✅ Tarama Bitti.")
 
-if __name__ == "__main__": asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
