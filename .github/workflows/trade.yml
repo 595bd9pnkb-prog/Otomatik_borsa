@@ -24,7 +24,7 @@ jobs:
           pip install pandas alpaca-trade-api python-telegram-bot matplotlib gspread oauth2client
 
 
-            - name: Botu Çalıştır
+      - name: Botu Çalıştır
         env:
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
