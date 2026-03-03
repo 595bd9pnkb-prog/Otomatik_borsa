@@ -17,16 +17,25 @@ api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpac
 
 def log_to_sheets(data):
     try:
-        if not GOOGLE_JSON: return
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds_info = json.loads(GOOGLE_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
-        sheet = client.open("Borsa_Log").Sheet1
+        
+        # Dosyayı isminden bulmaya çalış
+        spreadsheet = client.open("Borsa_Log")
+        # İlk sayfayı (hangisi olursa olsun) seç - En garantisi budur
+        sheet = spreadsheet.get_worksheet(0) 
+        
         sheet.append_row(data)
-        print(f"✅ Sheets Kaydı: {data[1]}")
+        print(f"✅ TABLOYA YAZILDI: {data[1]}")
+    except gspread.exceptions.SpreadsheetNotFound:
+        print("🚨 HATA: 'Borsa_Log' isimli dosya bulunamadı! İsim tam aynı mı?")
+    except gspread.exceptions.APIError as e:
+        print(f"🚨 HATA: Google API Hatası (İzin sorunu olabilir): {e}")
     except Exception as e:
-        print(f"🚨 Sheets Hatası: {e}")
+        print(f"🚨 HATA: Beklenmedik bir sorun oluştu: {e}")
+
 
 async def process_symbol(symbol, bot, cash_to_spend):
     try:
