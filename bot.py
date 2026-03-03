@@ -55,16 +55,19 @@ async def process_symbol(symbol, bot, cash_to_spend):
                 api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc')
                 # SHEETS KAYDI: Tarih, Sembol, İşlem, Fiyat, Adet, Toplam, Hızlı, Yavaş, RSI(0 şimdilik)
                 log_to_sheets([tarih, symbol, "ALIM", last_close, qty, last_close*qty, last_fast, last_slow, 0])
-                await bot.send_message(chat_id=CHAT_ID, text=f"🚀 *{symbol}* ALINDI\nFiyat: ${last_close}")
-
-        # SATIŞ MANTIĞI
+                await bot.send_message(chat_id=CHAT_ID, text=f"🚀 *{symbol}* ALINDI\nFiyat: ${        
+        
+        # SATIŞ MANTIĞI (Sadece elimizde hisse varsa sat)
         elif position and last_fast < last_slow:
-            qty = int(position.qty)
-            api.submit_order(symbol=symbol, qty=qty, side='sell', type='market', time_in_force='gtc')
-            log_to_sheets([tarih, symbol, "SATIS", last_close, qty, last_close*qty, last_fast, last_slow, 0])
-            await bot.send_message(chat_id=CHAT_ID, text=f"📉 *{symbol}* SATILDI\nFiyat: ${last_close}")
+            qty = int(position.qty) # Alpaca'dan gelen gerçek adeti kullan
+            if qty > 0:
+                print(f"📉 {symbol} SATILIYOR... Adet: {qty}")
+                api.submit_order(symbol=symbol, qty=qty, side='sell', type='market', time_in_force='gtc')
+                log_to_sheets([tarih, symbol, "SATIS", last_close, qty, last_close*qty, last_fast, last_slow, 0])
+                await bot.send_message(chat_id=CHAT_ID, text=f"📉 *{symbol}* SATILDI\nFiyat: ${last_close}")
+            else:
+                print(f"ℹ️ {symbol} satılamadı, çünkü elde hiç yok.")
 
-    except Exception as e: print(f"🚨 {symbol} Hatası: {e}")
 
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
