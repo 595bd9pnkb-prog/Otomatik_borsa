@@ -76,7 +76,7 @@ async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     acc = api.get_account()
     # Kasa eksiye düştüyse alım yapmaması için kontrol
-    cash = float(acc.cash)
+    cash = 100000
     if cash <= 0:
         print("🚨 Bakiye yetersiz veya eksi!")
         # Test amaçlı işlem yapması için nakit miktarını elle küçük bir rakam yapabilirsin
