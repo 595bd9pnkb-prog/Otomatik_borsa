@@ -22,7 +22,7 @@ def log_to_sheets(data):
         creds_info = json.loads(GOOGLE_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
-        sheet = client.open("Borsa_Log").sheet1
+        sheet = client.open("Borsa_Log").Sheet1
         sheet.append_row(data)
         print(f"✅ Sheets Kaydı: {data[1]}")
     except Exception as e:
