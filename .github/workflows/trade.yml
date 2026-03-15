@@ -1,23 +1,21 @@
-name: Borsa Botu
+name: Borsa Botu Calistir
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Her 5 dakikada bir çalışır
-  workflow_dispatch: # Manuel çalıştırma butonu
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # v3 yerine v4'e yükselttik (Node 20/24 desteği için)
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # v4 yerine v5'e yükselttik
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-python: '3.10'
+          python-version: '3.10' # Buradaki hata düzeltildi
 
       - name: Install Dependencies
         run: |
