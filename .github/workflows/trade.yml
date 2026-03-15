@@ -5,6 +5,10 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# GitHub'ın istediği Node.js 24 zorlamasını buraya ekliyoruz
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # Buradaki hata düzeltildi
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
