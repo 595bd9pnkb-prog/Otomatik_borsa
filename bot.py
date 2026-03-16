@@ -1,33 +1,39 @@
-import os
-import alpaca_trade_api as tradeapi
+import yfinance as yf
+import pandas as pd
 
-# API BİLGİLERİ (GitHub Secrets'tan alır)
-ALPACA_KEY = os.getenv('ALPACA_KEY')
-ALPACA_SECRET = os.getenv('ALPACA_SECRET')
+symbols = [
+"ONDS","ASTS","RKLB","IONQ","SOFI",
+"HOOD","PLTR","RBLX","OPEN","UPST"
+]
 
-# API BAĞLANTISI
-api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
+def scan(symbol):
 
-def force_reset():
-    try:
-        print("🚀 Sıfırlama işlemi başlatılıyor...")
-        
-        # 1. Tüm açık emirleri iptal et
-        api.cancel_all_orders()
-        print("✅ Tüm bekleyen emirler iptal edildi.")
+    df = yf.download(symbol,period="3mo",interval="1d")
 
-        # 2. Tüm açık pozisyonları kapat (Hepsini sat)
-        api.close_all_positions()
-        print("✅ Tüm açık pozisyonlar piyasa fiyatından satıldı.")
-        
-        # 3. Hesap bilgilerini kontrol et
-        account = api.get_account()
-        print(f"💰 İşlem Tamam! Güncel Nakit: ${account.cash}")
-        print("⚠️ Not: Alpaca Paper Trading'de tam $100.000'a dönmek için arayüz şarttır.")
-        print("Ancak bu kod elindeki 'hayalet' hisseleri temizledi, artık botun düzgün çalışacak.")
+    if len(df) < 60:
+        return
 
-    except Exception as e:
-        print(f"🚨 Hata oluştu: {e}")
+    avg_volume = df["Volume"].mean()
 
-if __name__ == "__main__":
-    force_reset()
+    last = df.iloc[-1]
+
+    volume_spike = last["Volume"] > avg_volume * 5
+
+    breakout = last["Close"] > df["Close"].rolling(60).max().iloc[-2]
+
+    price = last["Close"]
+
+    if volume_spike and breakout and price < 20:
+
+        print(f"""
+🚀 POTENTIAL RUNNER
+
+Symbol: {symbol}
+Price: {price}
+
+Volume Spike: YES
+Breakout: YES
+""")
+
+for s in symbols:
+    scan(s)
