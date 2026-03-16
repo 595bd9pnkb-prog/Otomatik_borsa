@@ -1,39 +1,119 @@
-import yfinance as yf
-import pandas as pd
+import os, asyncio, pandas as pd, json, gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import alpaca_trade_api as tradeapi
+from telegram import Bot
 
-symbols = [
-"ONDS","ASTS","RKLB","IONQ","SOFI",
-"HOOD","PLTR","RBLX","OPEN","UPST"
-]
+# API VE GİZLİ BİLGİLER
+ALPACA_KEY = os.getenv('ALPACA_KEY')
+ALPACA_SECRET = os.getenv('ALPACA_SECRET')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
+GOOGLE_JSON = os.getenv('GOOGLE_SHEETS_JSON')
 
-def scan(symbol):
+SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"]
+TRADE_PCT = 0.10 
 
-    df = yf.download(symbol,period="3mo",interval="1d")
+# RISK YÖNETİMİ AYARLARI
+STOP_LOSS_PCT = 0.02   # %2 Zarar Durdur
+TAKE_PROFIT_PCT = 0.05  # %5 Kâr Al
 
-    if len(df) < 60:
-        return
+api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
 
-    avg_volume = df["Volume"].mean()
+def log_to_sheets(data):
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds_info = json.loads(GOOGLE_JSON)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("Borsa_Log").get_worksheet(0)
+        sheet.append_row(data)
+    except Exception as e:
+        print(f"🚨 Tablo Yazma Hatası: {e}")
 
-    last = df.iloc[-1]
+async def process_symbol(symbol, bot, cash_to_spend):
+    try:
+        bars = api.get_bars(symbol, '1Min', limit=50).df
+        if bars.empty: return
 
-    volume_spike = last["Volume"] > avg_volume * 5
+        bars['SMA_FAST'] = bars['close'].rolling(3).mean()
+        bars['SMA_SLOW'] = bars['close'].rolling(8).mean()
+        bars.dropna(inplace=True)
+        
+        last_close = float(bars['close'].iloc[-1])
+        last_fast = float(bars['SMA_FAST'].iloc[-1])
+        last_slow = float(bars['SMA_SLOW'].iloc[-1])
+        tarih = pd.Timestamp.now(tz='Europe/Istanbul').strftime('%Y-%m-%d %H:%M')
 
-    breakout = last["Close"] > df["Close"].rolling(60).max().iloc[-2]
+        try:
+            position = api.get_position(symbol)
+            qty_held = int(position.qty)
+            entry_price = float(position.avg_entry_price)
+        except:
+            qty_held = 0
+            entry_price = 0
 
-    price = last["Close"]
+        # 1. ALIM SİNYALİ (SMA Kesişimi)
+        if qty_held == 0 and last_fast > last_slow:
+            if cash_to_spend <= 0: return
+            
+            qty_to_buy = int(cash_to_spend / last_close)
+            if qty_to_buy > 0:
+                # Stop ve Kar Al seviyelerini hesapla
+                sl_price = last_close * (1 - STOP_LOSS_PCT)
+                tp_price = last_close * (1 + TAKE_PROFIT_PCT)
+                
+                # Tabloya ekle (Sona SL ve TP ekledik)
+                log_to_sheets([tarih, symbol, "ALIM", last_close, qty_to_buy, last_close*qty_to_buy, last_fast, last_slow, 0, f"SL: {sl_price:.2f}", f"TP: {tp_price:.2f}"])
+                
+                msg = (f"🚀 *{symbol}* ALINDI\n"
+                       f"💰 Fiyat: ${last_close:.2f}\n"
+                       f"🛑 STOP (SL): ${sl_price:.2f} (-%2)\n"
+                       f"🎯 HEDEF (TP): ${tp_price:.2f} (+%5)")
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+                
+                api.submit_order(symbol=symbol, qty=qty_to_buy, side='buy', type='market', time_in_force='gtc')
 
-    if volume_spike and breakout and price < 20:
+        # 2. SATIŞ SİNYALİ (SMA Kesişimi VEYA SL/TP Noktası)
+        elif qty_held > 0:
+            sl_price = entry_price * (1 - STOP_LOSS_PCT)
+            tp_price = entry_price * (1 + TAKE_PROFIT_PCT)
+            
+            reason = ""
+            if last_fast < last_slow:
+                reason = "SMA Kesişimi (Teknik)"
+            elif last_close <= sl_price:
+                reason = "STOP LOSS (Zarar Durdur)"
+            elif last_close >= tp_price:
+                reason = "TAKE PROFIT (Kâr Al)"
 
-        print(f"""
-🚀 POTENTIAL RUNNER
+            if reason != "":
+                profit_loss = (last_close - entry_price) * qty_held
+                log_to_sheets([tarih, symbol, "SATIS", last_close, qty_held, last_close*qty_held, last_fast, last_slow, profit_loss, reason])
+                
+                msg = (f"📉 *{symbol}* SATILDI\n"
+                       f"❓ Neden: {reason}\n"
+                       f"💵 Fiyat: ${last_close:.2f}\n"
+                       f"📊 Kar/Zarar: ${profit_loss:.2f}")
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+                
+                api.submit_order(symbol=symbol, qty=qty_held, side='sell', type='market', time_in_force='gtc')
 
-Symbol: {symbol}
-Price: {price}
+    except Exception as e:
+        print(f"🚨 {symbol} Hatası: {e}")
 
-Volume Spike: YES
-Breakout: YES
-""")
+async def main():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    try:
+        acc = api.get_account()
+        current_cash = float(acc.cash)
+        cash_to_spend = current_cash * TRADE_PCT if current_cash > 0 else 0
+        
+        for s in SYMBOLS:
+            await process_symbol(s, bot, cash_to_spend)
+            await asyncio.sleep(1)
+        print("✅ Tarama Bitti.")
+    except Exception as e:
+        print(f"🚨 Ana Hata: {e}")
 
-for s in symbols:
-    scan(s)
+if __name__ == "__main__":
+    asyncio.run(main())
