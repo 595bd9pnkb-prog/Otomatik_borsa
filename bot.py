@@ -3,46 +3,59 @@ from oauth2client.service_account import ServiceAccountCredentials
 import alpaca_trade_api as tradeapi
 from telegram import Bot
 
-# API VE GİZLİ BİLGİLER
 ALPACA_KEY = os.getenv('ALPACA_KEY')
 ALPACA_SECRET = os.getenv('ALPACA_SECRET')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 GOOGLE_JSON = os.getenv('GOOGLE_SHEETS_JSON')
 
-SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX", "PLTR", "UBER", "COIN", "SHOP", "SNOW", "JPM", "V", "MA", "DIS", "ONDS", "RKLB", "IREN"]
-TRADE_PCT = 0.10 
+SYMBOLS = ["AAPL","MSFT","NVDA","AMZN","META","TSLA","AMD","PLTR","COIN","RKLB"]
 
-# RISK YÖNETİMİ AYARLARI
-STOP_LOSS_PCT = 0.02   # %2 Zarar Durdur
-TAKE_PROFIT_PCT = 0.05  # %5 Kâr Al
+TRADE_PCT = 0.10
+STOP_LOSS_PCT = 0.02
+TAKE_PROFIT_PCT = 0.05
 
 api = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, base_url='https://paper-api.alpaca.markets')
 
-def log_to_sheets(data):
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_info = json.loads(GOOGLE_JSON)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Borsa_Log").get_worksheet(0)
-        sheet.append_row(data)
-    except Exception as e:
-        print(f"🚨 Tablo Yazma Hatası: {e}")
+def calculate_rsi(df, period=14):
+
+    delta = df['close'].diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1/period).mean()
+    avg_loss = loss.ewm(alpha=1/period).mean()
+
+    rs = avg_gain / avg_loss
+
+    return 100 - (100/(1+rs))
+
 
 async def process_symbol(symbol, bot, cash_to_spend):
-    try:
-        bars = api.get_bars(symbol, '1Min', limit=50).df
-        if bars.empty: return
 
-        bars['SMA_FAST'] = bars['close'].rolling(3).mean()
-        bars['SMA_SLOW'] = bars['close'].rolling(8).mean()
-        bars.dropna(inplace=True)
-        
-        last_close = float(bars['close'].iloc[-1])
-        last_fast = float(bars['SMA_FAST'].iloc[-1])
-        last_slow = float(bars['SMA_SLOW'].iloc[-1])
-        tarih = pd.Timestamp.now(tz='Europe/Istanbul').strftime('%Y-%m-%d %H:%M')
+    try:
+
+        bars = api.get_bars(symbol,'5Min',limit=120).df
+
+        if len(bars) < 50:
+            return
+
+        bars['EMA9'] = bars['close'].ewm(span=9).mean()
+        bars['EMA21'] = bars['close'].ewm(span=21).mean()
+        bars['RSI'] = calculate_rsi(bars)
+
+        avg_volume = bars['volume'].mean()
+
+        last = bars.iloc[-1]
+
+        price = float(last['close'])
+        ema9 = float(last['EMA9'])
+        ema21 = float(last['EMA21'])
+        rsi = float(last['RSI'])
+
+        if avg_volume < 500000:
+            return
 
         try:
             position = api.get_position(symbol)
@@ -52,68 +65,83 @@ async def process_symbol(symbol, bot, cash_to_spend):
             qty_held = 0
             entry_price = 0
 
-        # 1. ALIM SİNYALİ (SMA Kesişimi)
-        if qty_held == 0 and last_fast > last_slow:
-            if cash_to_spend <= 0: return
-            
-            qty_to_buy = int(cash_to_spend / last_close)
-            if qty_to_buy > 0:
-                # Stop ve Kar Al seviyelerini hesapla
-                sl_price = last_close * (1 - STOP_LOSS_PCT)
-                tp_price = last_close * (1 + TAKE_PROFIT_PCT)
-                
-                # Tabloya ekle (Sona SL ve TP ekledik)
-                log_to_sheets([tarih, symbol, "ALIM", last_close, qty_to_buy, last_close*qty_to_buy, last_fast, last_slow, 0, f"SL: {sl_price:.2f}", f"TP: {tp_price:.2f}"])
-                
-                msg = (f"🚀 *{symbol}* ALINDI\n"
-                       f"💰 Fiyat: ${last_close:.2f}\n"
-                       f"🛑 STOP (SL): ${sl_price:.2f} (-%2)\n"
-                       f"🎯 HEDEF (TP): ${tp_price:.2f} (+%5)")
-                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
-                
-                api.submit_order(symbol=symbol, qty=qty_to_buy, side='buy', type='market', time_in_force='gtc')
+        # BUY SIGNAL
+        if qty_held == 0 and ema9 > ema21 and rsi < 70:
 
-        # 2. SATIŞ SİNYALİ (SMA Kesişimi VEYA SL/TP Noktası)
+            qty = int(cash_to_spend / price)
+
+            if qty > 0:
+
+                sl = price * (1 - STOP_LOSS_PCT)
+                tp = price * (1 + TAKE_PROFIT_PCT)
+
+                await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=f"🚀 BUY {symbol}\nPrice:{price}\nRSI:{rsi:.1f}\nSL:{sl:.2f}\nTP:{tp:.2f}"
+                )
+
+                api.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side='buy',
+                    type='market',
+                    time_in_force='gtc'
+                )
+
+        # SELL SIGNAL
         elif qty_held > 0:
-            sl_price = entry_price * (1 - STOP_LOSS_PCT)
-            tp_price = entry_price * (1 + TAKE_PROFIT_PCT)
-            
-            reason = ""
-            if last_fast < last_slow:
-                reason = "SMA Kesişimi (Teknik)"
-            elif last_close <= sl_price:
-                reason = "STOP LOSS (Zarar Durdur)"
-            elif last_close >= tp_price:
-                reason = "TAKE PROFIT (Kâr Al)"
 
-            if reason != "":
-                profit_loss = (last_close - entry_price) * qty_held
-                log_to_sheets([tarih, symbol, "SATIS", last_close, qty_held, last_close*qty_held, last_fast, last_slow, profit_loss, reason])
-                
-                msg = (f"📉 *{symbol}* SATILDI\n"
-                       f"❓ Neden: {reason}\n"
-                       f"💵 Fiyat: ${last_close:.2f}\n"
-                       f"📊 Kar/Zarar: ${profit_loss:.2f}")
-                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
-                
-                api.submit_order(symbol=symbol, qty=qty_held, side='sell', type='market', time_in_force='gtc')
+            sl = entry_price * (1 - STOP_LOSS_PCT)
+            tp = entry_price * (1 + TAKE_PROFIT_PCT)
+
+            reason = ""
+
+            if price <= sl:
+                reason = "STOP LOSS"
+
+            elif price >= tp:
+                reason = "TAKE PROFIT"
+
+            elif ema9 < ema21:
+                reason = "EMA CROSS"
+
+            if reason:
+
+                profit = (price-entry_price)*qty_held
+
+                await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=f"📉 SELL {symbol}\nReason:{reason}\nP/L:${profit:.2f}"
+                )
+
+                api.submit_order(
+                    symbol=symbol,
+                    qty=qty_held,
+                    side='sell',
+                    type='market',
+                    time_in_force='gtc'
+                )
 
     except Exception as e:
-        print(f"🚨 {symbol} Hatası: {e}")
+        print(f"{symbol} error {e}")
+
 
 async def main():
+
     bot = Bot(token=TELEGRAM_TOKEN)
-    try:
-        acc = api.get_account()
-        current_cash = float(acc.cash)
-        cash_to_spend = current_cash * TRADE_PCT if current_cash > 0 else 0
-        
-        for s in SYMBOLS:
-            await process_symbol(s, bot, cash_to_spend)
-            await asyncio.sleep(1)
-        print("✅ Tarama Bitti.")
-    except Exception as e:
-        print(f"🚨 Ana Hata: {e}")
+
+    acc = api.get_account()
+
+    cash = float(acc.cash)
+
+    cash_to_spend = cash * TRADE_PCT
+
+    for s in SYMBOLS:
+
+        await process_symbol(s,bot,cash_to_spend)
+
+        await asyncio.sleep(0.3)
 
 if __name__ == "__main__":
+
     asyncio.run(main())
